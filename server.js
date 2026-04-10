@@ -9,6 +9,7 @@ const app = express();
 /* =========================
    BASIC MIDDLEWARE
 ========================= */
+app.set("trust proxy", 1);
 app.use(helmet());
 app.use(express.json({ limit: "60kb" }));
 
@@ -43,7 +44,8 @@ app.use(
     windowMs: 60_000,
     max: 30,
     standardHeaders: true,
-    legacyHeaders: false
+    legacyHeaders: false,
+    validate: { xForwardedForHeader: false }
   })
 );
 
@@ -113,11 +115,14 @@ ${LABELS.map(l => "- " + l).join("\n")}
       ]
     });
 
+    let raw = resp.content[0].text;
+    raw = raw.replace(/```json\s*/i, "").replace(/```/g, "").trim();
+
     let data;
     try {
-      data = JSON.parse(resp.content[0].text);
+      data = JSON.parse(raw);
     } catch {
-      return res.status(502).json({ error: "model_json_invalid" });
+      return res.status(502).json({ error: "model_json_invalid", raw });
     }
 
     let payload = {
