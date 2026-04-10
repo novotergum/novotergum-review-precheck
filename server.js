@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import OpenAI from "openai";
+import Anthropic from "@anthropic/sdk";
 
 const app = express();
 
@@ -13,7 +13,7 @@ app.use(helmet());
 app.use(express.json({ limit: "60kb" }));
 
 /* =========================
-   CORS – KORREKT & STABIL
+   CORS
 ========================= */
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
@@ -22,14 +22,8 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
 
 const corsOptions = {
   origin: (origin, cb) => {
-    // kein Origin = server-to-server, health checks, curl
     if (!origin) return cb(null, true);
-
-    if (allowedOrigins.includes(origin)) {
-      return cb(null, true);
-    }
-
-    // ❗ WICHTIG: kein Error werfen
+    if (allowedOrigins.includes(origin)) return cb(null, true);
     return cb(null, false);
   },
   methods: ["POST", "OPTIONS"],
@@ -38,7 +32,7 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions)); // 🔑 Preflight explizit erlauben
+app.options("*", cors(corsOptions));
 
 /* =========================
    RATE LIMIT
@@ -54,10 +48,10 @@ app.use(
 );
 
 /* =========================
-   OPENAI
+   ANTHROPIC
 ========================= */
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY
 });
 
 const LABELS = [
@@ -91,31 +85,37 @@ app.post("/review-classify", async (req, res) => {
       .replace(/\b(\+?\d[\d\s().-]{7,}\d)\b/g, "[PHONE]");
 
     const system = `
-Du klassifizierst einen Google-Bewertungstext in genau EINEN der folgenden Gründe.
-Gib ausschließlich JSON zurück mit:
-- best_label
-- confidence (0..1)
-- rationale_short (max 1 Satz)
-- evidence_needed (max 1 Satz)
-- ranked_labels (Top 3)
+Du klassifizierst einen Google-Bewertungstext in genau EINEN der folgenden Gruende.
+Gib ausschliesslich gueltiges JSON zurueck – kein Text davor oder danach, keine Markdown-Backticks.
+JSON-Schema:
+{
+  "best_label": "<einer der Labels exakt>",
+  "confidence": 0.0,
+  "rationale_short": "<max 1 Satz>",
+  "evidence_needed": "<max 1 Satz>",
+  "ranked_labels": [
+    { "label": "<Label>", "score": 0.0 },
+    { "label": "<Label>", "score": 0.0 },
+    { "label": "<Label>", "score": 0.0 }
+  ]
+}
 
 Labels:
 ${LABELS.map(l => "- " + l).join("\n")}
 `.trim();
 
-    const resp = await client.chat.completions.create({
-      model: "gpt-4.1-mini",
-      temperature: 0,
-      response_format: { type: "json_object" },
+    const resp = await client.messages.create({
+      model: "claude-haiku-4-5",
+      max_tokens: 512,
+      system: system,
       messages: [
-        { role: "system", content: system },
         { role: "user", content: `Bewertungstext:\n${redacted}` }
       ]
     });
 
     let data;
     try {
-      data = JSON.parse(resp.choices[0].message.content);
+      data = JSON.parse(resp.content[0].text);
     } catch {
       return res.status(502).json({ error: "model_json_invalid" });
     }
@@ -134,8 +134,8 @@ ${LABELS.map(l => "- " + l).join("\n")}
       payload = {
         best_label: LABELS[5],
         confidence: 0.34,
-        rationale_short: "Uneindeutige Klassifikation; Standard-Empfehlung gewählt.",
-        evidence_needed: "Bitte konkrete Textstellen markieren und Kontext ergänzen.",
+        rationale_short: "Uneindeutige Klassifikation; Standard-Empfehlung gewaehlt.",
+        evidence_needed: "Bitte konkrete Textstellen markieren und Kontext ergaenzen.",
         ranked_labels: [{ label: LABELS[5], score: 0.34 }]
       };
     }
@@ -154,5 +154,5 @@ ${LABELS.map(l => "- " + l).join("\n")}
 ========================= */
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log("✅ review-precheck listening on", port);
+  console.log("review-precheck listening on", port);
 });
